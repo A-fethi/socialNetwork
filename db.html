@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Social Network Database Schema</title>
+    <style>
+        /* Global reset */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f7f7f7;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            color: #4A90E2;
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .schema {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 40px;
+            position: relative;
+        }
+
+        .table-wrapper {
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 280px;
+            min-width: 280px;
+            padding: 20px;
+            overflow: hidden;
+            position: relative;
+            z-index: 1;
+            transition: transform 0.3s ease-in-out;
+        }
+
+        .table-wrapper:hover {
+            transform: translateY(-10px);
+        }
+
+        .table-wrapper .title {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+            border-bottom: 2px solid #4A90E2;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.95em;
+            margin-bottom: 15px;
+        }
+
+        th, td {
+            padding: 10px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }
+
+        th {
+            background-color: #4A90E2;
+            color: white;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f4f4f4;
+        }
+
+        tr:hover {
+            background-color: #e0f0ff;
+        }
+
+        .foreign-key {
+            color: #e74c3c;
+        }
+
+        /* Line connection between tables */
+        .line {
+            position: absolute;
+            top: 50%;
+            left: 100%;
+            width: 50px;
+            height: 2px;
+            background-color: #4A90E2;
+            z-index: 0;
+        }
+
+        .foreign-key-line {
+            position: absolute;
+            top: 50%;
+            left: 100%;
+            width: 50px;
+            height: 2px;
+            background-color: #e74c3c;
+            z-index: 0;
+        }
+
+        /* Styling for buttons */
+        .btn {
+            background-color: #4A90E2;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background-color 0.3s;
+            z-index: 1;
+        }
+
+        .btn:hover {
+            background-color: #357ABD;
+        }
+
+        /* Layout for connecting tables */
+        .table-wrapper-wrapper {
+            display: flex;
+            position: relative;
+            align-items: center;
+        }
+
+        .note {
+            font-style: italic;
+            color: #888;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Social Network Database Schema</h1>
+
+        <div class="schema">
+            <!-- Users Table -->
+            <div class="table-wrapper-wrapper">
+                <div class="table-wrapper">
+                    <div class="title">Users</div>
+                    <table>
+                        <thead>
+                            <tr><th>Field</th><th>Type</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>user_id</td><td>INT (Primary Key)</td></tr>
+                            <tr><td>email</td><td>VARCHAR(255) (Unique)</td></tr>
+                            <tr><td>password</td><td>VARCHAR(255)</td></tr>
+                            <tr><td>first_name</td><td>VARCHAR(100)</td></tr>
+                            <tr><td>last_name</td><td>VARCHAR(100)</td></tr>
+                            <tr><td>date_of_birth</td><td>DATE</td></tr>
+                            <tr><td>avatar</td><td>VARCHAR(255) (Optional)</td></tr>
+                            <tr><td>nickname</td><td>VARCHAR(100) (Optional)</td></tr>
+                            <tr><td>about_me</td><td>TEXT (Optional)</td></tr>
+                        </tbody>
+                    </table>
+                    <a href="#" class="btn">See More</a>
+                </div>
+            </div>
+
+            <!-- Line connecting to Followers Table -->
+            <div class="foreign-key-line"></div>
+
+            <!-- Followers Table -->
+            <div class="table-wrapper-wrapper">
+                <div class="table-wrapper">
+                    <div class="title">Followers</div>
+                    <table>
+                        <thead>
+                            <tr><th>Field</th><th>Type</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>follower_id</td><td>INT (Foreign Key: Users.user_id)</td></tr>
+                            <tr><td>following_id</td><td>INT (Foreign Key: Users.user_id)</td></tr>
+                            <tr><td>status</td><td>ENUM('pending', 'accepted', 'declined')</td></tr>
+                        </tbody>
+                    </table>
+                    <a href="#" class="btn">See More</a>
+                </div>
+            </div>
+
+            <!-- Line connecting to Posts Table -->
+            <div class="foreign-key-line"></div>
+
+            <!-- Posts Table -->
+            <div class="table-wrapper-wrapper">
+                <div class="table-wrapper">
+                    <div class="title">Posts</div>
+                    <table>
+                        <thead>
+                            <tr><th>Field</th><th>Type</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>post_id</td><td>INT (Primary Key)</td></tr>
+                            <tr><td>user_id</td><td>INT (Foreign Key: Users.user_id)</td></tr>
+                            <tr><td>content</td><td>TEXT</td></tr>
+                            <tr><td>image_url</td><td>VARCHAR(255) (Optional)</td></tr>
+                            <tr><td>privacy</td><td>ENUM('public', 'almost_private', 'private')</td></tr>
+                            <tr><td>created_at</td><td>DATETIME</td></tr>
+                        </tbody>
+                    </table>
+                    <a href="#" class="btn">See More</a>
+                </div>
+            </div>
+
+            <!-- Line connecting to Groups Table -->
+            <div class="foreign-key-line"></div>
+
+            <!-- Groups Table -->
+            <div class="table-wrapper-wrapper">
+                <div class="table-wrapper">
+                    <div class="title">Groups</div>
+                    <table>
+                        <thead>
+                            <tr><th>Field</th><th>Type</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>group_id</td><td>INT (Primary Key)</td></tr>
+                            <tr><td>creator_id</td><td>INT (Foreign Key: Users.user_id)</td></tr>
+                            <tr><td>title</td><td>VARCHAR(255)</td></tr>
+                            <tr><td>description</td><td>TEXT</td></tr>
+                            <tr><td>created_at</td><td>DATETIME</td></tr>
+                        </tbody>
+                    </table>
+                    <a href="#" class="btn">See More</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notes -->
+        <div class="note">
+            <p>Note: This is a simple visual representation of the database schema. The relationships are marked with lines between tables indicating the foreign key connections.</p>
+        </div>
+    </div>
+
+</body>
+</html>
