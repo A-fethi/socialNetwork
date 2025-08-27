@@ -1,0 +1,70 @@
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go modules cache
+backend/go.sum
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+backend/db/db.db
+
+# Node modules and build output
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+# Frontend uploads (except default)
+frontend/src/uploads/*
+!frontend/src/uploads/default.png
+
+# Miscellaneous
+*.log
+*.tmp
+*.bak
+*.swp
+*.lock
+
+# Coverage reports
+coverage/
+*.lcov
+
+# Local environment files
+.env
+.env.*
+
+# Backup files
+*~
+
+go.sum
+backend/go.sum
+*-lock.json
+backend/uploads/*
