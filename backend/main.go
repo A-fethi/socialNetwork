@@ -1,57 +1,91 @@
 package main
 
 import (
+	"log"
 	"net/http"
 
 	"social-net/auth"
 	"social-net/comments"
 	"social-net/db"
+	"social-net/events"
+	"social-net/folowers"
+	"social-net/groups"
+	"social-net/messages"
+	"social-net/notification"
 	"social-net/posts"
 	"social-net/profile"
 	"social-net/session"
+	"social-net/utils"
 )
 
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Set CORS headers
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")        // Allow your frontend's origin
-		w.Header().Set("Access-Control-Allow-Credentials", "true")                    // Allow credentials (cookies)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")          // Allowed methods
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization") // Allowed headers
-
-		// If the request method is OPTIONS, just return OK (preflight request)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		// Call the next handler
-		next.ServeHTTP(w, r)
-	})
-}
 func main() {
 	fs := http.FileServer(http.Dir("static"))
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
+	http.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))))
+
 	db.Initdb()
-	http.HandleFunc("/api/login", auth.Login)
+
+	http.HandleFunc("/api/auth/", auth.Auth)
 	http.HandleFunc("/middle", session.Middleware)
 	http.HandleFunc("/api/info", auth.Getinfo)
-	http.HandleFunc("/api/logout", auth.Logout)
+
+	http.HandleFunc("/api/userinfo", profile.GetUserInfo)
+	http.HandleFunc("/api/updateprivacy", profile.UpdatePrivacy)
+	http.HandleFunc("/api/setprivacy", profile.UpdatePrivacy)
+	http.HandleFunc("/api/ownposts", profile.GetOwnPosts)
+	http.HandleFunc("/api/isfollowing", profile.IsFollowing)
+	http.HandleFunc("/api/followers", folowers.SendJSON)
+	http.HandleFunc("/api/getfollowingfolowers", profile.GetFollowersAndFollowing)
+	http.HandleFunc("/api/postsprivacy", profile.GetFollowersAndFollowingPosts)
+	http.HandleFunc("/api/checkmyprivacy", profile.CheckMyPrivacy)
+	http.HandleFunc("/api/getinvitationsfollow", profile.GetInvitationsFollow)
+	http.HandleFunc("/api/accepteinvi", profile.AcceptInvitation)
+
 	http.HandleFunc("/api/posts", posts.Post)
 	http.HandleFunc("/api/getposts", posts.Getposts)
 	http.HandleFunc("/api/getcomments", comments.Getcomments)
 	http.HandleFunc("/api/addcomments", comments.AddComments)
-	
-	// New profile endpoints
-	http.HandleFunc("/api/profile/", profile.GetProfile)
-	http.HandleFunc("/api/profile/privacy", profile.UpdatePrivacy)
-	http.HandleFunc("/api/followers/", profile.GetFollowers)
-	http.HandleFunc("/api/following/", profile.GetFollowing)
-	http.HandleFunc("/api/follow/", profile.FollowUser)
-	http.HandleFunc("/api/unfollow/", profile.UnfollowUser)
-	http.HandleFunc("/api/follow/status/", profile.CheckFollowStatus)
-	http.HandleFunc("/api/posts/user/", profile.GetUserPosts)
-	
-	http.Handle("/api/", corsMiddleware(http.DefaultServeMux))
-	http.ListenAndServe(":8080", nil)
+
+	http.HandleFunc("/api/getmessages", messages.GetMessages)
+	http.HandleFunc("/api/messages", messages.GetMessages)
+	http.HandleFunc("/ws", messages.Handleconnections)
+	http.HandleFunc("/api/openchat", messages.OpenChat)
+
+	http.HandleFunc("/api/creategroups", groups.CreateGroup)
+	http.HandleFunc("/api/getgroups", groups.GetGroups)
+	http.HandleFunc("/api/addmembertogroup", groups.AddMemberToGroup)
+	http.HandleFunc("/api/requesttojoingroup", groups.RequestToJoinGroup)
+	http.HandleFunc("/api/removememberfromgroup", groups.RemoveMemberFromGroup)
+	http.HandleFunc("/api/acceptgroupmember", groups.AcceptGroupMember)
+	http.HandleFunc("/api/cancelgrouprequest", groups.CancelGroupRequest)
+	http.HandleFunc("/api/mygroups", groups.MyGroups)
+	http.HandleFunc("/api/pendinginvitations", groups.GetPendingInvitations)
+	http.HandleFunc("/api/handleinvitation", groups.HandleInvitation)
+	http.HandleFunc("/api/GetInvitations", groups.GetPendingInvitations)
+	http.HandleFunc("/api/ismember", groups.IsGroupMember)
+	http.HandleFunc("/api/checkmem", groups.CheckGroupMembershipStatus)
+	http.HandleFunc("/api/acceptgroupinvite", groups.HandleInvitation)
+	http.HandleFunc("/api/declinegroupinvite", groups.HandleInvitation)
+	http.HandleFunc("/api/groupcomments/add", groups.AddGroupComment)
+	http.HandleFunc("/api/groupcomments", groups.GetGroupComments)
+	http.HandleFunc("/api/user/pendinginvites", groups.GetUserPendingInvitations)
+	http.HandleFunc("/api/groupmembers/status", groups.GetGroupMemberStatuses)
+
+	http.HandleFunc("/api/groupposts", groups.GetGroupPosts)
+	http.HandleFunc("/api/groupposts/add", groups.AddGroupPost)
+
+	http.HandleFunc("/api/postsprv", posts.PostPrivacy)
+	http.HandleFunc("/api/events", events.GetEvents)
+	http.HandleFunc("/api/events/add", events.CreateEvent)
+	http.HandleFunc("/api/notifications", notification.GetNotifications)
+	http.HandleFunc("/api/markasread", notification.MarkNotificationAsRead)
+	http.HandleFunc("/api/events/join", events.JoinEvent)
+
+	http.HandleFunc("/ws/group/", messages.HandleGroupWebSocket)
+	http.HandleFunc("/ws/notifications", notification.HandleNotificationWebSocket)
+
+	http.HandleFunc("/api/allusers", utils.Users)
+	http.HandleFunc("/api/getavatar", auth.GetAvatar)
+
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }

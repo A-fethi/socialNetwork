@@ -3,955 +3,731 @@ package profile
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
-	"strconv"
-	"strings"
 
 	"social-net/db"
+	logger "social-net/log"
 	"social-net/session"
 )
 
-type User struct {
-	ID        int    `json:"id"`
-	Username  string `json:"username"`
-	Email     string `json:"email"`
-	Firstname string `json:"firstname"`
-	Lastname  string `json:"lastname"`
-	Bio       string `json:"bio"`
-	IsPrivate bool   `json:"is_private"`
+type UserInfo struct {
+	Username           string   `json:"username"`
+	Email              string   `json:"email"`
+	FirstName          string   `json:"first_name"`
+	LastName           string   `json:"last_name"`
+	Bio                string   `json:"bio"`
+	DateOfBirth        string   `json:"date_of_birth"`
+	Privacy            string   `json:"privacy"`
+	FollowersCount     int      `json:"followers_count"`
+	FollowingCount     int      `json:"following_count"`
+	FollowerUsernames  []string `json:"follower_usernames"`
+	FollowingUsernames []string `json:"following_usernames"`
+	PostsCount         int      `json:"posts"`
+	Avatar             string   `json:"avatar"`
+	Nickname           string   `json:"nickname"`
+	FollowStatus       string   `json:"follow_status"`
 }
 
-type PrivacySettings struct {
-	IsPrivate bool `json:"is_private"`
+type GetPost struct {
+	Id            string `json:"id"`
+	User_id       string `json:"user_id"`
+	Author        string `json:"author"`
+	Content       string `json:"content"`
+	Title         string `json:"title"`
+	Creation_date string `json:"creation_date"`
+	Status        string `json:"status"`
+	Avatar        string `json:"avatar"`
+	Image         string `json:"image"`
+	CommentsCount int    `json:"comments_count"`
 }
 
-// GetProfile handles fetching a user's profile
-func GetProfile(w http.ResponseWriter, r *http.Request) {
-	// Check if user is authenticated
-	userID, err := session.GetUserID(r)
-	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+type Comments struct {
+	Id        string `json:"id"`
+	PostId    string `json:"post_id"`
+	Author    string `json:"author"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+}
+
+func GetUserInfo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	token, err := r.Cookie("token")
+	if token == nil || err != nil {
+		http.Error(w, "Unauthorized: Missing token", http.StatusUnauthorized)
+		return
+	}
+	sessionToken := token.Value
+	user_id, ok := session.GetUserIDFromToken(sessionToken)
+	if !ok || user_id == "" {
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+		return
+	}
+	username := r.URL.Query().Get("user_id")
+	if username == "" {
+		logger.LogError("Username is required", nil)
+		http.Error(w, "Username is required", http.StatusBadRequest)
 		return
 	}
 
-	// Extract profile ID from URL
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid profile ID", http.StatusBadRequest)
+	var userID string
+	err1 := db.DB.QueryRow("SELECT id FROM users WHERE username = ?", username).Scan(&userID)
+	if err1 != nil {
+		if err1 == sql.ErrNoRows {
+			fmt.Println("No user found with the given username")
+			http.Error(w, "No user found", http.StatusNotFound)
+			return
+		}
+		logger.LogError("Error fetching user ID", err)
+		http.Error(w, "Error fetching user ID", http.StatusInternalServerError)
 		return
 	}
 
-	profileID, err := strconv.Atoi(pathParts[3])
-	if err != nil {
-		http.Error(w, "Invalid profile ID", http.StatusBadRequest)
-		return
-	}
-
-	// Get database connection
-	database, err := db.GetDB()
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	// Fetch user profile
-	var user User
-	err = database.QueryRow(`
-		SELECT id, username, email, first_name, last_name, bio, is_private 
-		FROM users 
-		WHERE id = ?`, profileID).Scan(
-		&user.ID, &user.Username, &user.Email, &user.Firstname, &user.Lastname, &user.Bio, &user.IsPrivate,
-	)
-
+	var userInfo UserInfo
+	err = db.DB.QueryRow("SELECT username, email, first_name, last_name, bio, date_of_birth, privacy, avatar, nickname FROM users WHERE id = ?", userID).Scan(
+		&userInfo.Username, &userInfo.Email, &userInfo.FirstName, &userInfo.LastName, &userInfo.Bio, &userInfo.DateOfBirth, &userInfo.Privacy, &userInfo.Avatar, &userInfo.Nickname)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			http.Error(w, "User not found", http.StatusNotFound)
-		} else {
-			http.Error(w, "Database error", http.StatusInternalServerError)
+			logger.LogError("No user found with the given ID", nil)
+			http.Error(w, "No user found", http.StatusNotFound)
+			return
 		}
+		fmt.Println("Error fetching user info:", err)
+		http.Error(w, "Error fetching user info", http.StatusInternalServerError)
 		return
 	}
 
-	// Check if profile is private and if current user is allowed to view it
-	if user.IsPrivate && userID != profileID {
-		// Check if current user is following this profile
-		var isFollowing bool
-		err = database.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM followers 
-				WHERE follower_id = ? AND following_id = ?
-			)`, userID, profileID).Scan(&isFollowing)
-
-		if err != nil || !isFollowing {
-			// Return limited profile info
-			limitedUser := struct {
-				ID        int    `json:"id"`
-				Username  string `json:"username"`
-				Firstname string `json:"firstname"`
-				Lastname  string `json:"lastname"`
-				IsPrivate bool   `json:"is_private"`
-			}{
-				ID:        user.ID,
-				Username:  user.Username,
-				Firstname: user.Firstname,
-				Lastname:  user.Lastname,
-				IsPrivate: user.IsPrivate,
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(limitedUser)
+	query := `
+		SELECT status FROM followers WHERE follower_id = ? AND followed_id = ?`
+	var followStatus string
+	err = db.DB.QueryRow(query, user_id, userID).Scan(&followStatus)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			followStatus = "not_following"
+		} else {
+			logger.LogError("Error checking follow status", err)
+			http.Error(w, "Error checking follow status", http.StatusInternalServerError)
 			return
 		}
 	}
+	userInfo.FollowStatus = followStatus
+	followersCount, err := GetFollowersCount(userID)
+	if err != nil {
+		logger.LogError("Error getting followers count", err)
+		http.Error(w, "Error getting followers count", http.StatusInternalServerError)
+		return
+	}
 
-	// Return full profile info
+	followingCount, err := GetFollowingCount(userID)
+	if err != nil {
+		logger.LogError("Error getting following count", err)
+		http.Error(w, "Error getting following count", http.StatusInternalServerError)
+		return
+	}
+
+	followers, err := GetFollowerUsernames(userID)
+	if err != nil {
+		logger.LogError("Error getting follower usernames", err)
+		http.Error(w, "Error getting follower usernames", http.StatusInternalServerError)
+		return
+	}
+
+	following, err := GetFollowingUsernames(userID)
+	if err != nil {
+		logger.LogError("Error getting following usernames", err)
+		http.Error(w, "Error getting following usernames", http.StatusInternalServerError)
+		return
+	}
+
+	var postCount int
+	err = db.DB.QueryRow("SELECT COUNT(*) FROM posts WHERE user_id = ?", userID).Scan(&postCount)
+	if err != nil {
+		logger.LogError("Error counting posts", err)
+		http.Error(w, "Error getting post count", http.StatusInternalServerError)
+		return
+	}
+
+	userInfo.FollowersCount = followersCount
+	userInfo.FollowingCount = followingCount
+	userInfo.FollowerUsernames = followers
+	userInfo.FollowingUsernames = following
+	userInfo.PostsCount = postCount
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
+	json.NewEncoder(w).Encode(userInfo)
 }
 
-// UpdatePrivacy handles updating a user's privacy settings
 func UpdatePrivacy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Check if user is authenticated
-	userID, err := session.GetUserID(r)
+	var request struct {
+		Privacy string `json:"privacy"`
+	}
+
+	token, err := r.Cookie("token")
+	fmt.Println("TokenVAlue:", token.Value)
+	fmt.Println("Token:", token)
 	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	userID, ok := session.GetUserIDFromToken(token.Value)
+	if !ok || userID == "" {
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+		return
+	}
 
-	// Parse request body
-	var settings PrivacySettings
-	err = json.NewDecoder(r.Body).Decode(&settings)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Get database connection
-	database, err := db.GetDB()
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+	if request.Privacy != "public" && request.Privacy != "private" {
+		http.Error(w, "Invalid privacy value", http.StatusBadRequest)
 		return
 	}
 
-	// Update privacy settings
-	_, err = database.Exec("UPDATE users SET is_private = ? WHERE id = ?", settings.IsPrivate, userID)
-	if err != nil {
-		http.Error(w, "Failed to update privacy settings", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
-}
-
-// GetFollowers returns a list of users who follow the specified user
-func GetFollowers(w http.ResponseWriter, r *http.Request) {
-	// Check if user is authenticated
-	currentUserID, err := session.GetUserID(r)
-	if err != nil {
+	username, ok1 := session.GetUsernameFromUserID(userID)
+	if !ok1 {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	// Extract user ID from URL
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+	_, err = db.DB.Exec("UPDATE users SET privacy = ? WHERE username = ?", request.Privacy, username)
+	if err != nil {
+		logger.LogError("Failed to update privacy", err)
+		http.Error(w, "Failed to update privacy", http.StatusInternalServerError)
 		return
 	}
 
-	var targetUserID int
-	if pathParts[3] == "me" {
-		targetUserID = currentUserID
-	} else {
-		var err error
-		targetUserID, err = strconv.Atoi(pathParts[3])
+	if request.Privacy == "public" {
+
+		_, err = db.DB.Exec("UPDATE followers SET status = 'accepted' WHERE followed_id = (SELECT id FROM users WHERE username = ?) AND status = 'pending'", username)
 		if err != nil {
-			http.Error(w, "Invalid user ID", http.StatusBadRequest)
+			logger.LogError("Failed to accept pending follow requests", err)
+			http.Error(w, "Failed to accept pending follow requests", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// Get database connection
-	database, err := db.GetDB()
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func GetFollowersCount(userID string) (int, error) {
+	var count int
+	err := db.DB.QueryRow("SELECT COUNT(*) FROM followers WHERE followed_id = ? AND status = 'accepted'", userID).Scan(&count)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
+		return 0, err
 	}
+	return count, nil
+}
 
-	// Check if profile is private and if current user is allowed to view it
-	if currentUserID != targetUserID {
-		var isPrivate bool
-		err = database.QueryRow("SELECT is_private FROM users WHERE id = ?", targetUserID).Scan(&isPrivate)
-		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
-			return
-		}
-
-		if isPrivate {
-			// Check if current user is following this profile
-			var isFollowing bool
-			err = database.QueryRow(`
-				SELECT EXISTS(
-					SELECT 1 FROM followers 
-					WHERE follower_id = ? AND following_id = ?
-				)`, currentUserID, targetUserID).Scan(&isFollowing)
-
-			if err != nil || !isFollowing {
-				http.Error(w, "Unauthorized to view this private profile", http.StatusForbidden)
-				return
-			}
-		}
-	}
-
-	// Fetch followers
-	rows, err := database.Query(`
-		SELECT u.id, u.username, u.first_name, u.last_name
-		FROM users u
-		JOIN followers f ON u.id = f.follower_id
-		WHERE f.following_id = ?
-	`, targetUserID)
+func GetFollowingCount(userID string) (int, error) {
+	var count int
+	err := db.DB.QueryRow("SELECT COUNT(*) FROM followers WHERE follower_id = ? AND status = 'accepted'", userID).Scan(&count)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
+		return 0, err
+	}
+	return count, nil
+}
+
+func GetFollowerUsernames(userID string) ([]string, error) {
+	rows, err := db.DB.Query(`
+		SELECT u.username 
+		FROM users u 
+		JOIN followers f ON u.id = f.follower_id 
+		WHERE f.followed_id = ? AND f.status = 'accepted'`, userID)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 
-	followers := []struct {
-		ID        int    `json:"id"`
-		Username  string `json:"username"`
-		Firstname string `json:"firstname"`
-		Lastname  string `json:"lastname"`
-	}{}
-
+	var usernames []string
 	for rows.Next() {
-		var follower struct {
-			ID        int    `json:"id"`
-			Username  string `json:"username"`
-			Firstname string `json:"firstname"`
-			Lastname  string `json:"lastname"`
+		var username string
+		if err := rows.Scan(&username); err != nil {
+			return nil, err
 		}
-		err := rows.Scan(&follower.ID, &follower.Username, &follower.Firstname, &follower.Lastname)
-		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
-			return
-		}
-		followers = append(followers, follower)
+		usernames = append(usernames, username)
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(followers)
+	return usernames, nil
 }
 
-// GetFollowing returns a list of users that the specified user follows
-func GetFollowing(w http.ResponseWriter, r *http.Request) {
-	// Check if user is authenticated
-	currentUserID, err := session.GetUserID(r)
+func GetFollowingUsernames(userID string) ([]string, error) {
+	rows, err := db.DB.Query(`
+		SELECT u.username 
+		FROM users u 
+		JOIN followers f ON u.id = f.followed_id 
+		WHERE f.follower_id = ? AND f.status = 'accepted'`, userID)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Extract user ID from URL
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
-		return
-	}
-
-	var targetUserID int
-	if pathParts[3] == "me" {
-		targetUserID = currentUserID
-	} else {
-		var err error
-		targetUserID, err = strconv.Atoi(pathParts[3])
-		if err != nil {
-			http.Error(w, "Invalid user ID", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Get database connection
-	database, err := db.GetDB()
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	// Check if profile is private and if current user is allowed to view it
-	if currentUserID != targetUserID {
-		var isPrivate bool
-		err = database.QueryRow("SELECT is_private FROM users WHERE id = ?", targetUserID).Scan(&isPrivate)
-		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
-			return
-		}
-
-		if isPrivate {
-			// Check if current user is following this profile
-			var isFollowing bool
-			err = database.QueryRow(`
-				SELECT EXISTS(
-					SELECT 1 FROM followers 
-					WHERE follower_id = ? AND following_id = ?
-				)`, currentUserID, targetUserID).Scan(&isFollowing)
-
-			if err != nil || !isFollowing {
-				http.Error(w, "Unauthorized to view this private profile", http.StatusForbidden)
-				return
-			}
-		}
-	}
-
-	// Fetch following users
-	rows, err := database.Query(`
-		SELECT u.id, u.username, u.first_name, u.last_name
-		FROM users u
-		JOIN followers f ON u.id = f.following_id
-		WHERE f.follower_id = ?
-	`, targetUserID)
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	defer rows.Close()
 
-	following := []struct {
-		ID        int    `json:"id"`
-		Username  string `json:"username"`
-		Firstname string `json:"firstname"`
-		Lastname  string `json:"lastname"`
-	}{}
-
+	var usernames []string
 	for rows.Next() {
-		var follow struct {
-			ID        int    `json:"id"`
-			Username  string `json:"username"`
-			Firstname string `json:"firstname"`
-			Lastname  string `json:"lastname"`
+		var username string
+		if err := rows.Scan(&username); err != nil {
+			return nil, err
 		}
-		err := rows.Scan(&follow.ID, &follow.Username, &follow.Firstname, &follow.Lastname)
-		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
-			return
-		}
-		following = append(following, follow)
+		usernames = append(usernames, username)
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(following)
+	return usernames, nil
 }
 
-// Post represents a user's post
-type Post struct {
-	ID        int    `json:"id"`
-	UserID    int    `json:"user_id"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"created_at"`
-	Username  string `json:"username"`
-	Likes     int    `json:"likes"`
-}
+func IsFollowing(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-// GetUserPosts returns all posts made by a specific user
-func GetUserPosts(w http.ResponseWriter, r *http.Request) {
-	// Check if user is authenticated
-	currentUserID, err := session.GetUserID(r)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	token, err := r.Cookie("token")
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		http.Error(w, "Unauthorized: Missing token", http.StatusUnauthorized)
+		return
+	}
+	sessionToken := token.Value
+	userID, ok := session.GetUserIDFromToken(sessionToken)
+	if !ok || userID == "" {
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
 		return
 	}
 
-	// Extract user ID from URL
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+	followerUsername := r.URL.Query().Get("follower_id")
+	followedUsername := r.URL.Query().Get("followed_id")
+
+	log.Println("Follower Username:", followerUsername)
+	log.Println("Followed Username:", followedUsername)
+
+	if followerUsername == "" || followedUsername == "" {
+		http.Error(w, "Missing parameters", http.StatusBadRequest)
 		return
 	}
 
-	var targetUserID int
-	if pathParts[3] == "me" {
-		targetUserID = currentUserID
-	} else {
-		var err error
-		targetUserID, err = strconv.Atoi(pathParts[3])
-		if err != nil {
-			http.Error(w, "Invalid user ID", http.StatusBadRequest)
-			return
-		}
+	var followerID, followedID string
+	err = db.DB.QueryRow("SELECT id FROM users WHERE username = ?", followerUsername).Scan(&followerID)
+	if err != nil {
+		http.Error(w, "Error finding follower user", http.StatusInternalServerError)
+		return
 	}
 
-	// Get database connection
-	database, err := db.GetDB()
+	err = db.DB.QueryRow("SELECT id FROM users WHERE username = ?", followedUsername).Scan(&followedID)
+	if err != nil {
+		http.Error(w, "Error finding followed user", http.StatusInternalServerError)
+		return
+	}
+
+	var exists bool
+	err = db.DB.QueryRow(`SELECT EXISTS(
+        SELECT 1 FROM followers 
+        WHERE follower_id = ? AND followed_id = ? AND status = 'accepted'
+    )`, followerID, followedID).Scan(&exists)
 	if err != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	// Check if profile is private and if current user is allowed to view it
-	if currentUserID != targetUserID {
-		var isPrivate bool
-		err = database.QueryRow("SELECT is_private FROM users WHERE id = ?", targetUserID).Scan(&isPrivate)
-		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
-			return
-		}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"isFollowing": exists})
+}
 
-		if isPrivate {
-			// Check if current user is following this profile
-			var isFollowing bool
-			err = database.QueryRow(`
-				SELECT EXISTS(
-					SELECT 1 FROM followers 
-					WHERE follower_id = ? AND following_id = ?
-				)`, currentUserID, targetUserID).Scan(&isFollowing)
+func IsAcceptedFollower(viewerID, ownerID string) (bool, error) {
+	var exists bool
+	err := db.DB.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM followers WHERE follower_id = ? AND followed_id = ? AND status = 'accepted')",
+		viewerID, ownerID,
+	).Scan(&exists)
+	return exists, err
+}
 
-			if err != nil || !isFollowing {
-				http.Error(w, "Unauthorized to view this private profile", http.StatusForbidden)
-				return
-			}
-		}
+func GetOwnPosts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	token, err1 := r.Cookie("token")
+	if err1 != nil {
+		http.Error(w, "Unauthorized: Missing token", http.StatusUnauthorized)
+		return
+	}
+	sessionToken := token.Value
+	CurrentUserid, ok := session.GetUserIDFromToken(sessionToken)
+	if !ok || CurrentUserid == "" {
+		fmt.Println("Invalid token")
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+		return
+	}
+	username := r.URL.Query().Get("username")
+
+	if username == "" {
+		http.Error(w, "Username is required", http.StatusBadRequest)
+		return
 	}
 
-	// Fetch user posts
-	rows, err := database.Query(`
-		SELECT p.id, p.user_id, p.content, p.created_at, u.username, 
-		       (SELECT COUNT(*) FROM post_likes WHERE post_id = p.id) as likes
+	var userID string
+	err := db.DB.QueryRow("SELECT id FROM users WHERE username = ?", username).Scan(&userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			fmt.Println("No user found with the given username")
+			http.Error(w, "User not found", http.StatusNotFound)
+			return
+		}
+		fmt.Println("Error fetching user ID:", err)
+		http.Error(w, "Error finding user", http.StatusInternalServerError)
+		return
+	}
+	query := `
+		SELECT DISTINCT p.id, p.user_id, p.author, p.content, p.title, p.creation_date, p.status, u.avatar, p.image
 		FROM posts p
-		JOIN users u ON p.user_id = u.id
+		LEFT JOIN postsPrivacy pp ON p.id = pp.post_id
+		LEFT JOIN users u ON p.user_id = u.id
 		WHERE p.user_id = ?
-		ORDER BY p.created_at DESC
-	`, targetUserID)
+  		AND (
+    	p.status = 'public'
+    	OR (p.status = 'private' AND EXISTS (
+        SELECT 1 FROM followers WHERE follower_id = ? AND followed_id = ? AND status = 'accepted'
+    	))
+    	OR (p.status = 'semi-private' AND pp.user_id = ?)
+    	OR (? = p.user_id)
+  )
+ORDER BY p.creation_date DESC
+	`
+	rows, err := db.DB.Query(query, userID, CurrentUserid, userID, CurrentUserid, CurrentUserid)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		http.Error(w, "Error querying posts", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
 
-	posts := []Post{}
+	var posts []GetPost
 	for rows.Next() {
-		var post Post
-		err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.Username, &post.Likes)
+		var post GetPost
+		err := rows.Scan(&post.Id, &post.User_id, &post.Author, &post.Content, &post.Title, &post.Creation_date, &post.Status, &post.Avatar, &post.Image)
 		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
+			http.Error(w, "Error scanning posts", http.StatusInternalServerError)
 			return
 		}
 		posts = append(posts, post)
+	}
+
+	for i, post := range posts {
+
+		var commentsCount int
+		err := db.DB.QueryRow("SELECT COUNT(*) FROM comments WHERE post_id = ?", post.Id).Scan(&commentsCount)
+		if err != nil {
+			fmt.Println("Error getting comments count:", err)
+			http.Error(w, "Error getting comments count", http.StatusInternalServerError)
+			return
+		}
+		posts[i].CommentsCount = commentsCount
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(posts)
 }
 
-// Activity represents a user activity event
-type Activity struct {
-	ID        int    `json:"id"`
-	Type      string `json:"type"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"created_at"`
-	TargetID  int    `json:"target_id,omitempty"`
-}
+func GetFollowersAndFollowing(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-// GetUserActivity returns the activity history of a user
-func GetUserActivity(w http.ResponseWriter, r *http.Request) {
-	// Check if user is authenticated
-	currentUserID, err := session.GetUserID(r)
+	profileUser := r.URL.Query().Get("profileUser")
+	if profileUser == "" {
+		http.Error(w, "Profile user is required", http.StatusBadRequest)
+		return
+	}
+
+	token, err := r.Cookie("token")
 	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	// Extract user ID from URL
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+	tokenValue := token.Value
+	userID, ok := session.GetUserIDFromToken(tokenValue)
+	if !ok || userID == "" {
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
 		return
 	}
+	currentUser, _ := session.GetUsernameFromUserID(userID)
 
-	var targetUserID int
-	if pathParts[3] == "me" {
-		targetUserID = currentUserID
-	} else {
-		var err error
-		targetUserID, err = strconv.Atoi(pathParts[3])
-		if err != nil {
-			http.Error(w, "Invalid user ID", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Get database connection
-	database, err := db.GetDB()
+	followersQuery := `
+        SELECT follower_id
+        FROM followers
+        WHERE followed_id = (SELECT id FROM users WHERE username = $1) and status = 'accepted'
+    `
+	followersRows, err := db.DB.Query(followersQuery, profileUser)
 	if err != nil {
+		fmt.Println("err2", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
+	defer followersRows.Close()
 
-	// Check if profile is private and if current user is allowed to view it
-	if currentUserID != targetUserID {
-		var isPrivate bool
-		err = database.QueryRow("SELECT is_private FROM users WHERE id = ?", targetUserID).Scan(&isPrivate)
+	var followers []string
+	for followersRows.Next() {
+		var followerID string
+		err := followersRows.Scan(&followerID)
 		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
-			return
+			continue
 		}
 
-		if isPrivate {
-			// Check if current user is following this profile
-			var isFollowing bool
-			err = database.QueryRow(`
-				SELECT EXISTS(
-					SELECT 1 FROM followers 
-					WHERE follower_id = ? AND following_id = ?
-				)`, currentUserID, targetUserID).Scan(&isFollowing)
-
-			if err != nil || !isFollowing {
-				http.Error(w, "Unauthorized to view this private profile", http.StatusForbidden)
-				return
-			}
-		}
+		username, _ := session.GetUsernameFromUserID(userID)
+		followers = append(followers, username)
 	}
 
-	// Fetch user activity
-	rows, err := database.Query(`
-		SELECT id, type, content, created_at, target_id
-		FROM user_activity
-		WHERE user_id = ?
-		ORDER BY created_at DESC
-		LIMIT 50
-	`, targetUserID)
+	followingQuery := `
+        SELECT followed_id
+        FROM followers
+        WHERE follower_id = (SELECT id FROM users WHERE username = $1) and status='accepted'
+    `
+	followingRows, err := db.DB.Query(followingQuery, profileUser)
 	if err != nil {
+		fmt.Println("err1", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer followingRows.Close()
+
+	var following []string
+	for followingRows.Next() {
+		var followingID string
+		err := followingRows.Scan(&followingID)
+		if err != nil {
+			continue
+		}
+
+		username, _ := session.GetUsernameFromUserID(followingID)
+		following = append(following, username)
+	}
+
+	response := map[string]interface{}{
+		"followers":      followers,
+		"following":      following,
+		"is_own_profile": currentUser == profileUser,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func GetFollowersAndFollowingPosts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	token, _ := r.Cookie("token")
+	tokenValue := token.Value
+	userID, ok := session.GetUserIDFromToken(tokenValue)
+	if !ok || userID == "" {
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	followersQuery := `
+		SELECT follower_id
+		FROM followers
+		WHERE followed_id = ? and status = 'accepted'
+    `
+	followersRows, err := db.DB.Query(followersQuery, userID)
+	if err != nil {
+		logger.LogError("Database error", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer followersRows.Close()
+
+	var followers []string
+	for followersRows.Next() {
+		var followerID string
+		err := followersRows.Scan(&followerID)
+		if err != nil {
+			logger.LogError("Error scanning follower ID", err)
+			continue
+		}
+
+		username, _ := session.GetUsernameFromUserID(followerID)
+		followers = append(followers, username)
+	}
+
+	followingQuery := `
+        SELECT followed_id
+        FROM followers
+        WHERE follower_id = (SELECT id FROM users WHERE username = $1) and status='accepted'
+    `
+	followingRows, err := db.DB.Query(followingQuery, userID)
+	if err != nil {
+		logger.LogError("Database error", err)
+
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer followingRows.Close()
+
+	var following []string
+	for followingRows.Next() {
+		var followingID string
+		err := followingRows.Scan(&followingID)
+		if err != nil {
+			logger.LogError("Error scanning following ID", err)
+			continue
+		}
+
+		username, _ := session.GetUsernameFromUserID(followingID)
+		following = append(following, username)
+	}
+
+	response := map[string]interface{}{
+		"followers": followers,
+		"following": following,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func CheckMyPrivacy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	token, _ := r.Cookie("token")
+	username1, ok := session.GetUserIDFromToken(token.Value)
+	if !ok || username1 == "" {
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+		return
+	}
+	username, _ := session.GetUsernameFromUserID(username1)
+
+	row := db.DB.QueryRow(`SELECT privacy FROM users WHERE username=?`, username)
+	var privacy string
+	err := row.Scan(&privacy)
+	if err != nil {
+		logger.LogError("Failed to fetch privacy", err)
+		http.Error(w, "Failed to fetch privacy", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"privacy": privacy})
+}
+
+func GetInvitationsFollow(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	token, _ := r.Cookie("token")
+	tokenValue := token.Value
+	userID, ok := session.GetUserIDFromToken(tokenValue)
+	if !ok || userID == "" {
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	rows, err := db.DB.Query("SELECT follower_id FROM Followers WHERE followed_id = ? AND status = 'pending'", userID)
+	if err != nil {
+		fmt.Println("Error fetching invitations:", err)
+		http.Error(w, "Failed to fetch invitations", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
 
-	activities := []Activity{}
+	var invitations []struct {
+		FollowerID string `json:"follower_id"`
+		Username   string `json:"username"`
+	}
 	for rows.Next() {
-		var activity Activity
-		var targetID sql.NullInt64
-		err := rows.Scan(&activity.ID, &activity.Type, &activity.Content, &activity.CreatedAt, &targetID)
+		var invitation struct {
+			FollowerID string `json:"follower_id"`
+			Username   string `json:"username"`
+		}
+		err := rows.Scan(&invitation.FollowerID)
 		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
+			fmt.Println("Error scanning invitation:", err)
+			http.Error(w, "Failed to scan invitation", http.StatusInternalServerError)
 			return
 		}
 
-		if targetID.Valid {
-			activity.TargetID = int(targetID.Int64)
-		}
-
-		activities = append(activities, activity)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(activities)
-}
-
-// ProfileData represents all profile information
-type ProfileData struct {
-	User      User       `json:"user"`
-	Posts     []Post     `json:"posts"`
-	Activity  []Activity `json:"activity"`
-	Followers []struct {
-		ID        int    `json:"id"`
-		Username  string `json:"username"`
-		Firstname string `json:"firstname"`
-		Lastname  string `json:"lastname"`
-	} `json:"followers"`
-	Following []struct {
-		ID        int    `json:"id"`
-		Username  string `json:"username"`
-		Firstname string `json:"firstname"`
-		Lastname  string `json:"lastname"`
-	} `json:"following"`
-	IsOwnProfile bool `json:"is_own_profile"`
-}
-
-// GetCompleteProfile returns all profile information for a user
-func GetCompleteProfile(w http.ResponseWriter, r *http.Request) {
-	// Check if user is authenticated
-	currentUserID, err := session.GetUserID(r)
-	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Extract profile ID from URL
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid profile ID", http.StatusBadRequest)
-		return
-	}
-
-	var targetUserID int
-	if pathParts[3] == "me" {
-		targetUserID = currentUserID
-	} else {
-		var err error
-		targetUserID, err = strconv.Atoi(pathParts[3])
+		err = db.DB.QueryRow("SELECT username FROM users WHERE id = ?", invitation.FollowerID).Scan(&invitation.Username)
 		if err != nil {
-			http.Error(w, "Invalid profile ID", http.StatusBadRequest)
+			fmt.Println("Error fetching username:", err)
+			http.Error(w, "Failed to fetch username", http.StatusInternalServerError)
 			return
 		}
+
+		invitations = append(invitations, invitation)
 	}
 
-	// Get database connection
-	database, err := db.GetDB()
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	// Fetch user profile
-	var user User
-	err = database.QueryRow(`
-		SELECT id, username, email, first_name, last_name, bio, is_private 
-		FROM users 
-		WHERE id = ?`, targetUserID).Scan(
-		&user.ID, &user.Username, &user.Email, &user.Firstname, &user.Lastname, &user.Bio, &user.IsPrivate,
-	)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "User not found", http.StatusNotFound)
-		} else {
-			http.Error(w, "Database error", http.StatusInternalServerError)
-		}
-		return
-	}
-
-	// Check if profile is private and if current user is allowed to view it
-	isOwnProfile := currentUserID == targetUserID
-	canViewFullProfile := isOwnProfile
-
-	if !canViewFullProfile && user.IsPrivate {
-		// Check if current user is following this profile
-		var isFollowing bool
-		err = database.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM followers 
-				WHERE follower_id = ? AND following_id = ?
-			)`, currentUserID, targetUserID).Scan(&isFollowing)
-
-		canViewFullProfile = err == nil && isFollowing
-	}
-
-	// If not own profile and can't view full profile, return limited info
-	if !canViewFullProfile {
-		limitedProfile := struct {
-			User struct {
-				ID        int    `json:"id"`
-				Username  string `json:"username"`
-				Firstname string `json:"firstname"`
-				Lastname  string `json:"lastname"`
-				IsPrivate bool   `json:"is_private"`
-			} `json:"user"`
-			IsOwnProfile bool `json:"is_own_profile"`
-		}{
-			User: struct {
-				ID        int    `json:"id"`
-				Username  string `json:"username"`
-				Firstname string `json:"firstname"`
-				Lastname  string `json:"lastname"`
-				IsPrivate bool   `json:"is_private"`
-			}{
-				ID:        user.ID,
-				Username:  user.Username,
-				Firstname: user.Firstname,
-				Lastname:  user.Lastname,
-				IsPrivate: user.IsPrivate,
-			},
-			IsOwnProfile: false,
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(limitedProfile)
-		return
-	}
-
-	// Prepare complete profile data
-	profileData := ProfileData{
-		User:         user,
-		IsOwnProfile: isOwnProfile,
-	}
-
-	// Fetch user posts
-	postRows, err := database.Query(`
-		SELECT p.id, p.user_id, p.content, p.created_at, u.username, 
-		       (SELECT COUNT(*) FROM post_likes WHERE post_id = p.id) as likes
-		FROM posts p
-		JOIN users u ON p.user_id = u.id
-		WHERE p.user_id = ?
-		ORDER BY p.created_at DESC
-	`, targetUserID)
-	if err == nil {
-		defer postRows.Close()
-		for postRows.Next() {
-			var post Post
-			err := postRows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.Username, &post.Likes)
-			if err == nil {
-				profileData.Posts = append(profileData.Posts, post)
-			}
-		}
-	}
-
-	// Fetch user activity
-	activityRows, err := database.Query(`
-		SELECT id, type, content, created_at, target_id
-		FROM user_activity
-		WHERE user_id = ?
-		ORDER BY created_at DESC
-		LIMIT 50
-	`, targetUserID)
-	if err == nil {
-		defer activityRows.Close()
-		for activityRows.Next() {
-			var activity Activity
-			var targetID sql.NullInt64
-			err := activityRows.Scan(&activity.ID, &activity.Type, &activity.Content, &activity.CreatedAt, &targetID)
-			if err == nil {
-				if targetID.Valid {
-					activity.TargetID = int(targetID.Int64)
-				}
-				profileData.Activity = append(profileData.Activity, activity)
-			}
-		}
-	}
-
-	// Fetch followers
-	followerRows, err := database.Query(`
-		SELECT u.id, u.username, u.first_name, u.last_name
-		FROM users u
-		JOIN followers f ON u.id = f.follower_id
-		WHERE f.following_id = ?
-	`, targetUserID)
-	if err == nil {
-		defer followerRows.Close()
-		for followerRows.Next() {
-			var follower struct {
-				ID        int    `json:"id"`
-				Username  string `json:"username"`
-				Firstname string `json:"firstname"`
-				Lastname  string `json:"lastname"`
-			}
-			err := followerRows.Scan(&follower.ID, &follower.Username, &follower.Firstname, &follower.Lastname)
-			if err == nil {
-				profileData.Followers = append(profileData.Followers, follower)
-			}
-		}
-	}
-
-	// Fetch following
-	followingRows, err := database.Query(`
-		SELECT u.id, u.username, u.first_name, u.last_name
-		FROM users u
-		JOIN followers f ON u.id = f.following_id
-		WHERE f.follower_id = ?
-	`, targetUserID)
-	if err == nil {
-		defer followingRows.Close()
-		for followingRows.Next() {
-			var following struct {
-				ID        int    `json:"id"`
-				Username  string `json:"username"`
-				Firstname string `json:"firstname"`
-				Lastname  string `json:"lastname"`
-			}
-			err := followingRows.Scan(&following.ID, &following.Username, &following.Firstname, &following.Lastname)
-			if err == nil {
-				profileData.Following = append(profileData.Following, following)
-			}
-		}
-	}
+	fmt.Println("invitations", invitations)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(profileData)
+	json.NewEncoder(w).Encode(invitations)
 }
 
-// FollowUser handles a user following another user
-func FollowUser(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func AcceptInvitation(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	token, _ := r.Cookie("token")
+	tokenValue := token.Value
+	userID, ok := session.GetUserIDFromToken(tokenValue)
+	if !ok || userID == "" {
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
 		return
 	}
 
-	// Check if user is authenticated
-	followerID, err := session.GetUserID(r)
-	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+	var data struct {
+		FollowerID string `json:"follower_id"`
 	}
+	err := json.NewDecoder(r.Body).Decode(&data)
+	fmt.Println("data", data)
 
-	// Extract user ID to follow from URL
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
-		return
-	}
-
-	followingID, err := strconv.Atoi(pathParts[3])
-	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
-		return
-	}
-
-	// Can't follow yourself
-	if followerID == followingID {
-		http.Error(w, "Cannot follow yourself", http.StatusBadRequest)
-		return
-	}
-
-	// Get database connection
-	database, err := db.GetDB()
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	// Check if user exists
-	var exists bool
-	err = database.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)", followingID).Scan(&exists)
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	if !exists {
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	// Check if already following
-	err = database.QueryRow("SELECT EXISTS(SELECT 1 FROM followers WHERE follower_id = ? AND following_id = ?)",
-		followerID, followingID).Scan(&exists)
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	if exists {
-		// Already following, return success
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]bool{"success": true})
-		return
-	}
-
-	// Add follow relationship
-	_, err = database.Exec("INSERT INTO followers (follower_id, following_id, created_at) VALUES (?, ?, datetime('now'))",
-		followerID, followingID)
-	if err != nil {
-		http.Error(w, "Failed to follow user", http.StatusInternalServerError)
-		return
-	}
-
-	// Add activity record
-	_, err = database.Exec(
-		"INSERT INTO user_activity (user_id, type, content, target_id, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
-		followerID, "follow", "started following a user", followingID,
-	)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
-}
-
-// UnfollowUser handles a user unfollowing another user
-func UnfollowUser(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Check if user is authenticated
-	followerID, err := session.GetUserID(r)
-	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Extract user ID to unfollow from URL
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
-		return
-	}
-
-	followingID, err := strconv.Atoi(pathParts[3])
-	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
-		return
-	}
-
-	// Get database connection
-	database, err := db.GetDB()
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	// Delete follow relationship
-	_, err = database.Exec("DELETE FROM followers WHERE follower_id = ? AND following_id = ?",
-		followerID, followingID)
-	if err != nil {
-		http.Error(w, "Failed to unfollow user", http.StatusInternalServerError)
-		return
-	}
-
-	// Add activity record
-	_, err = database.Exec(
-		"INSERT INTO user_activity (user_id, type, content, target_id, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
-		followerID, "unfollow", "unfollowed a user", followingID,
-	)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
-}
-
-// CheckFollowStatus checks if the current user is following another user
-func CheckFollowStatus(w http.ResponseWriter, r *http.Request) {
-	// Check if user is authenticated
-	followerID, err := session.GetUserID(r)
-	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Extract user ID to check from URL
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
-		return
-	}
-
-	followingID, err := strconv.Atoi(pathParts[3])
-	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
-		return
-	}
-
-	// Get database connection
-	database, err := db.GetDB()
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	// Check if following
-	var isFollowing bool
-	err = database.QueryRow(`
-		SELECT EXISTS(
-			SELECT 1 FROM followers 
-			WHERE follower_id = ? AND following_id = ?
-		)`, followerID, followingID).Scan(&isFollowing)
+	follower_id, _ := session.GetUserIDFromUsername(data.FollowerID)
 
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		http.Error(w, "Failed to decode request body", http.StatusBadRequest)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"is_following": isFollowing})
+	_, err = db.DB.Exec("UPDATE Followers SET status = 'accepted' WHERE follower_id = ? AND followed_id = ?", follower_id, userID)
+	if err != nil {
+		fmt.Println("Error updating invitation status:", err)
+		http.Error(w, "Failed to update invitation status", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }

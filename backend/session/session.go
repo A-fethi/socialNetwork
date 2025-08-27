@@ -1,140 +1,124 @@
 package session
 
 import (
-	"errors"
+	"database/sql"
+	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"social-net/db"
+	logger "social-net/log"
 
 	"github.com/gofrs/uuid"
 )
 
-var (
-	sessions     = make(map[string]int)
-	sessionMutex sync.RWMutex
-)
+func Setsession(w http.ResponseWriter, r *http.Request, userID string) string {
+	Deletesession(userID)
 
-// CreateSession creates a new session for a user
-func CreateSession(userID int) (string, error) {
-	// Generate a new UUID for the session token
-	uuid, err := uuid.NewV4()
+	token, _ := uuid.NewV7()
+	sessionID, _ := uuid.NewV7()
+
+	_, err := db.DB.Exec("INSERT INTO sessions (session_id,user_id, token, expires_at) VALUES (?,?, ?, ?)",
+		sessionID, userID, token.String(), time.Now().Add(time.Hour*24))
 	if err != nil {
-		return "", err
+		fmt.Println("Error inserting session:", err)
+		return ""
 	}
 
-	token := uuid.String()
+	http.SetCookie(w, &http.Cookie{
+		Name:    "token",
+		Value:   token.String(),
+		Expires: time.Now().Add(time.Hour * 2),
+		Path:    "/",
+	})
 
-	// Store the session in memory
-	sessionMutex.Lock()
-	sessions[token] = userID
-	sessionMutex.Unlock()
-
-	// Store the session in the database for persistence
-	database, err := db.GetDB()
-	if err != nil {
-		return "", err
-	}
-
-	_, err = database.Exec(
-		"INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, datetime('now'))",
-		token, userID,
-	)
-	if err != nil {
-		return "", err
-	}
-
-	return token, nil
+	return token.String()
 }
 
-// GetUserIDFromToken retrieves the user ID associated with a session token
-func GetUserIDFromToken(token string) (int, bool) {
-	// First check in-memory cache
-	sessionMutex.RLock()
-	userID, exists := sessions[token]
-	sessionMutex.RUnlock()
+func Validatesession(id string, token string) bool {
+	var count int
+	var expiresAt time.Time
 
-	if exists {
-		return userID, true
-	}
-
-	// If not in memory, check the database
-	database, err := db.GetDB()
+	err := db.DB.QueryRow("SELECT COUNT(*), expires_at FROM sessions WHERE user_id=? AND token=? LIMIT 1",
+		id, token).Scan(&count, &expiresAt)
 	if err != nil {
-		return 0, false
+		logger.LogError("Error validating session", err)
+		return false
 	}
 
-	var id int
-	err = database.QueryRow(
-		"SELECT user_id FROM sessions WHERE token = ? AND created_at > datetime('now', '-30 day')",
-		token,
-	).Scan(&id)
-
-	if err != nil {
-		return 0, false
+	if count == 0 || expiresAt.Before(time.Now()) {
+		if count > 0 {
+			Deletesession(id)
+		}
+		return false
 	}
 
-	// Add to in-memory cache
-	sessionMutex.Lock()
-	sessions[token] = id
-	sessionMutex.Unlock()
-
-	return id, true
+	return true
 }
 
-// GetUserID extracts the user ID from the request's cookie token
-func GetUserID(r *http.Request) (int, error) {
-	cookie, err := r.Cookie("session_token")
+func Deletesession(id string) error {
+	_, err := db.DB.Exec("DELETE FROM sessions WHERE user_id=?", id)
 	if err != nil {
-		return 0, errors.New("unauthorized: no session token")
+		logger.LogError("Error deleting session", err)
+	}
+	return nil
+}
+
+func Hassession(id string) int {
+	var sessionCount int
+	err := db.DB.QueryRow("SELECT COUNT(*) FROM sessions WHERE user_id=? AND expires_at > ?",
+		id, time.Now()).Scan(&sessionCount)
+	if err != nil {
+		logger.LogError("Error checking session", err)
+		return 0
 	}
 
-	userID, ok := GetUserIDFromToken(cookie.Value)
-	if !ok {
-		return 0, errors.New("unauthorized: invalid session token")
+	return sessionCount
+}
+
+func GetUserIDFromToken(token string) (string, bool) {
+	if token == "" {
+		fmt.Println("Error: Empty token provided")
+		return "", false
+	}
+	var userID string
+	err := db.DB.QueryRow("SELECT user_id FROM sessions WHERE token=? AND expires_at > ?",
+		token, time.Now()).Scan(&userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			fmt.Println("Error: No valid session found for token")
+		} else {
+			fmt.Println("Database error getting user from token:", err)
+		}
+		return "", false
+	}
+
+	return userID, true
+}
+
+func GetUsernameFromUserID(id string) (string, bool) {
+	var username string
+
+	err := db.DB.QueryRow("SELECT username FROM users WHERE id=?",
+		id).Scan(&username)
+	if err != nil {
+		logger.LogError("Error getting user from username", err)
+		return "", false
+	}
+
+	return username, true
+}
+
+func GetUserIDFromUsername(username string) (string, error) {
+	var userID string
+	err := db.DB.QueryRow("SELECT id FROM users WHERE username=? OR email=?",
+		username,
+		username).Scan(&userID)
+	fmt.Println("User ID from username:", userID)
+	if err != nil {
+		fmt.Println("Error getting user from username:", err)
+		return "", err
 	}
 
 	return userID, nil
-}
-
-// DeleteSession removes a session
-func DeleteSession(token string) error {
-	// Remove from memory
-	sessionMutex.Lock()
-	delete(sessions, token)
-	sessionMutex.Unlock()
-
-	// Remove from database
-	database, err := db.GetDB()
-	if err != nil {
-		return err
-	}
-
-	_, err = database.Exec("DELETE FROM sessions WHERE token = ?", token)
-	return err
-}
-
-// SetSessionCookie sets the session cookie in the response
-func SetSessionCookie(w http.ResponseWriter, token string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session_token",
-		Value:    token,
-		Path:     "/",
-		Expires:  time.Now().Add(30 * 24 * time.Hour),
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   true, // Set to true in production with HTTPS
-	})
-}
-
-// ClearSessionCookie clears the session cookie
-func ClearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session_token",
-		Value:    "",
-		Path:     "/",
-		Expires:  time.Now().Add(-1 * time.Hour),
-		HttpOnly: true,
-	})
 }

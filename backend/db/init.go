@@ -3,37 +3,40 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"os"
+	"log"
 
 	_ "github.com/mattn/go-sqlite3"
+	migrate "github.com/rubenv/sql-migrate"
 )
 
 var DB *sql.DB
 
-// Initdb initializes the database and runs the schema
 func Initdb() {
-	// Open the SQLite database (will create if not exists)
 	var err error
 	DB, err = sql.Open("sqlite3", "./db/db.db")
 	if err != nil {
-		panic(err)
+		fmt.Println("Failed to open database:", err)
+		return
 	}
 
-	// Ensure the database is available
 	if err := DB.Ping(); err != nil {
-		panic(fmt.Sprintf("Failed to connect to the database: %v", err))
+		fmt.Println("Failed to connect to database:", err)
+		return
 	}
 
-	sch, err := os.ReadFile("./db/schema.sql")
+	migrations := &migrate.FileMigrationSource{
+		Dir: "db/migrations/sqlite3",
+	}
 
+	n, err := migrate.Exec(DB, "sqlite3", migrations, migrate.Up)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to read schema.sql: %v", err))
+		log.Printf("Migration failed: %v", err)
+		downN, downErr := migrate.ExecMax(DB, "sqlite3", migrations, migrate.Down, 1)
+		if downErr != nil {
+			log.Fatalf("Rollback failed: %v", downErr)
+		}
+		log.Printf("Rolled back %d migration(s)", downN)
+		return
 	}
-	_, err = DB.Exec(string(sch))
-
-	if err != nil {
-		panic(fmt.Sprintf("Failed to execute schema: %v", err))
-	}
-
-	fmt.Println("Database initialized successfully")
+	fmt.Printf("Applied %d migrations!\n", n)
 }

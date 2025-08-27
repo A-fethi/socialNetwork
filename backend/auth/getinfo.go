@@ -3,14 +3,15 @@ package auth
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"social-net/db"
+	logger "social-net/log"
 	"social-net/session"
 )
 
 type Info struct {
+	ID        string `json:"id"`
 	Username  string
 	Email     string
 	Firstname string
@@ -18,41 +19,58 @@ type Info struct {
 	Date      string
 	Bio       string
 	Password  string
+	Avatar    string
 }
 
 func Getinfo(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081") // your frontend origin
-	w.Header().Set("Access-Control-Allow-Credentials", "true")             // important for cookies
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")   // include all used methods
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")         // accept JSON headers, etc.
-	// Get the token from the cookie
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
 	cookie, err := r.Cookie("token")
 	if err != nil {
+		logger.LogError("Unauthorized: Missing token", err)
 		http.Error(w, "Unauthorized: Missing token", http.StatusUnauthorized)
 		return
 	}
 
 	token := cookie.Value
-	// Get the user ID from the token
-	userID, _ := session.GetUserIDFromToken(token)
-	// Get the username from the user ID
-	username, _ := session.Getusernamefromuserid(userID)
-	// Declare a variable to hold the user information
+	userID, ok := session.GetUserIDFromToken(token)
+	if !ok || userID == "" {
+		logger.LogError("Unauthorized: Missing token", err)
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+		return
+	}
+	username, ok := session.GetUsernameFromUserID(userID)
+	if !ok || username == "" {
+		logger.LogError("Unauthorized: Invalid token", err)
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+		return
+	}
 	var info Info
-	fmt.Println("username", username)
-	// Query the database to get the user's information
-	err = db.DB.QueryRow("SELECT username, email, first_name, last_name, date_of_birth,bio FROM users WHERE username=?", username).Scan(&info.Username, &info.Email, &info.Firstname, &info.Lastname, &info.Date, &info.Bio)
+
+	avatar := ""
+	err = db.DB.QueryRow("SELECT id, username, email, first_name, last_name, date_of_birth,bio, avatar FROM users WHERE username=?", username).Scan(&info.ID, &info.Username, &info.Email, &info.Firstname, &info.Lastname, &info.Date, &info.Bio, &avatar)
 	if err != nil {
+		logger.LogError("Error retrieving user information", err)
 		if err == sql.ErrNoRows {
-			fmt.Println("error", err)
+			logger.LogError("User not found", err)
+
 			http.Error(w, "User not found", http.StatusNotFound)
 		} else {
-			fmt.Println("error", err)
+			logger.LogError("Error retrieving user information", err)
+
 			http.Error(w, "Error retrieving user information", http.StatusInternalServerError)
 		}
 		return
 	}
-	fmt.Println("info", info)
+
+	if avatar != "" {
+		info.Avatar = avatar
+	} else {
+		info.Avatar = ""
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)

@@ -3,43 +3,47 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
-	"social-net/session"
 	"time"
+
+	logger "social-net/log"
+	"social-net/session"
 )
 
 func Logout(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081") // your frontend origin
-	w.Header().Set("Access-Control-Allow-Credentials", "true")             // important for cookies
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")   // include all used methods
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")         // accept JSON headers, etc.
-	// Retrieve token from cookie
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
 	cookie, err := r.Cookie("token")
 	if err != nil {
-		// If cookie is not found or error occurs, return unauthorized error
+		logger.LogError("Unauthorized: No token found", err)
+
 		http.Error(w, "Unauthorized - No token found", http.StatusUnauthorized)
 		return
 	}
 
 	token := cookie.Value
 
-	// Get userID from token
-	userid, _ := session.GetUserIDFromToken(token)
+	userid, ok := session.GetUserIDFromToken(token)
+	if !ok || userid == "" {
+		http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+		return
+	}
 
-	// Delete the session
 	err = session.Deletesession(userid)
+	if err != nil {
+		logger.LogError("Failed to delete session", err)
+		http.Error(w, "Failed to delete session", http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:    "token",
 		Value:   "",
 		Expires: time.Now().Add(-time.Hour),
 		Path:    "/",
 	})
-	if err != nil {
-		// If session deletion fails, return an error
-		http.Error(w, "Failed to delete session", http.StatusInternalServerError)
-		return
-	}
 
-	// Send a successful response
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"message": "Logged out successfully",
